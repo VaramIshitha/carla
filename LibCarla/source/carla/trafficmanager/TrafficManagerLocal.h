@@ -8,13 +8,11 @@
 
 #include <atomic>
 #include <chrono>
-#include <unordered_map>
 #include <thread>
 #include <vector>
 
 #include "carla/client/DebugHelper.h"
 #include "carla/client/detail/EpisodeProxy.h"
-#include "carla/client/detail/Simulator.h"
 #include "carla/client/TrafficLight.h"
 #include "carla/client/World.h"
 #include "carla/Memory.h"
@@ -24,7 +22,6 @@
 #include "carla/trafficmanager/InMemoryMap.h"
 #include "carla/trafficmanager/Parameters.h"
 #include "carla/trafficmanager/SimulationState.h"
-#include "carla/trafficmanager/SnippetProfiler.h"
 #include "carla/trafficmanager/TrackTraffic.h"
 #include "carla/trafficmanager/TrafficManagerBase.h"
 #include "carla/trafficmanager/TrafficManagerServer.h"
@@ -71,7 +68,7 @@ private:
   /// Pointer to local map cache.
   LocalMapPtr local_map;
   /// Structures to hold waypoint buffers for all vehicles.
-  std::shared_ptr<BufferMap> buffer_map;
+  BufferMap buffer_map;
   /// Carla's debug helper object.
   cc::DebugHelper debug_helper;
   /// Object for tracking paths of the traffic vehicles.
@@ -83,13 +80,15 @@ private:
   /// Parameterization object.
   Parameters parameters;
   /// Array to hold output data of localization stage.
-  LocalizationFramePtr localization_frame_ptr;
+  LocalizationFrame localization_frame;
   /// Array to hold output data of collision avoidance.
-  CollisionFramePtr collision_frame_ptr;
+  CollisionFrame collision_frame;
   /// Array to hold output data of traffic light response.
-  TLFramePtr tl_frame_ptr;
+  TLFrame tl_frame;
   /// Array to hold output data of motion planning.
-  ControlFramePtr control_frame_ptr;
+  ControlFrame control_frame;
+  /// Variable to keep track of currently reserved array space for frames.
+  uint64_t current_reserved_capacity {0u};
   /// Various stages representing core operations of traffic manager.
   LocalizationStage localization_stage;
   CollisionStage collision_stage;
@@ -110,8 +109,6 @@ private:
   std::condition_variable step_end_trigger;
   /// Single worker thread for sequential execution of sub-components.
   std::unique_ptr<std::thread> worker_thread;
-  /// Object to measure execution timing and throuhput of code snippets.
-  SnippetProfiler snippet_profiler;
 
   /// Method to check if all traffic lights are frozen in a group.
   bool CheckAllFrozen(TLGroup tl_to_freeze);

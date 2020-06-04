@@ -4,6 +4,8 @@
 // This work is licensed under the terms of the MIT license.
 // For a copy, see <https://opensource.org/licenses/MIT>.
 
+#include "carla/client/detail/Simulator.h"
+
 #include "carla/trafficmanager/TrafficManagerLocal.h"
 
 namespace carla {
@@ -35,7 +37,7 @@ TrafficManagerLocal::TrafficManagerLocal(
                                          track_traffic,
                                          local_map,
                                          parameters,
-                                         localization_frame_ptr,
+                                         localization_frame,
                                          debug_helper)),
 
     collision_stage(CollisionStage(vehicle_id_list,
@@ -43,14 +45,14 @@ TrafficManagerLocal::TrafficManagerLocal(
                                    buffer_map,
                                    track_traffic,
                                    parameters,
-                                   collision_frame_ptr,
+                                   collision_frame,
                                    debug_helper)),
 
     traffic_light_stage(TrafficLightStage(vehicle_id_list,
                                           simulation_state,
                                           buffer_map,
                                           parameters,
-                                          tl_frame_ptr)),
+                                          tl_frame)),
 
     motion_plan_stage(MotionPlanStage(vehicle_id_list,
                                       simulation_state,
@@ -61,10 +63,10 @@ TrafficManagerLocal::TrafficManagerLocal(
                                       longitudinal_highway_PID_parameters,
                                       lateral_PID_parameters,
                                       lateral_highway_PID_parameters,
-                                      localization_frame_ptr,
-                                      collision_frame_ptr,
-                                      tl_frame_ptr,
-                                      control_frame_ptr)),
+                                      localization_frame,
+                                      collision_frame,
+                                      tl_frame,
+                                      control_frame)),
 
     alsm(ALSM(registered_vehicles,
               buffer_map,
@@ -106,11 +108,12 @@ void TrafficManagerLocal::Start() {
 }
 
 void TrafficManagerLocal::Run() {
-  buffer_map = std::make_shared<BufferMap>();
-  localization_frame_ptr = std::make_shared<LocalizationFrame>(INITIAL_SIZE);
-  collision_frame_ptr = std::make_shared<CollisionFrame>(INITIAL_SIZE);
-  tl_frame_ptr = std::make_shared<TLFrame>(INITIAL_SIZE);
-  control_frame_ptr = std::make_shared<ControlFrame>(INITIAL_SIZE);
+
+  localization_frame.reserve(INITIAL_SIZE);
+  collision_frame.reserve(INITIAL_SIZE);
+  tl_frame.reserve(INITIAL_SIZE);
+  control_frame.reserve(INITIAL_SIZE);
+  current_reserved_capacity = INITIAL_SIZE;
 
   while (run_traffic_manger.load()) {
     bool synchronous_mode = parameters.GetSynchronousMode();
@@ -119,7 +122,7 @@ void TrafficManagerLocal::Run() {
     // Wait for external trigger to initiate cycle in synchronous mode.
     if (synchronous_mode) {
       std::unique_lock<std::mutex> lock(step_execution_mutex);
-      step_begin_trigger.wait(lock, [this]() { return step_begin.load(); });
+      step_begin_trigger.wait(lock, [this]() {return step_begin.load();});
       step_begin.store(false);
     }
 
@@ -127,11 +130,11 @@ void TrafficManagerLocal::Run() {
     if (!synchronous_mode && hybrid_physics_mode) {
       TimePoint current_instance = chr::system_clock::now();
       chr::duration<float> elapsed_time = current_instance - previous_update_instance;
-      if (elapsed_time.count() > HYBRID_MODE_DT) {
-        previous_update_instance = current_instance;
-      } else {
-        continue;
+      float time_to_wait = HYBRID_MODE_DT - elapsed_time.count();
+      if (time_to_wait > 0.0f) {
+        std::this_thread::sleep_for(chr::duration<float>(time_to_wait));
       }
+      previous_update_instance = current_instance;
     }
 
     // Updating simulation state, actor life cycle and performing necessary cleanup.
@@ -141,18 +144,34 @@ void TrafficManagerLocal::Run() {
     int current_registered_vehicles_state = registered_vehicles.GetState();
     unsigned long number_of_vehicles = vehicle_id_list.size();
     if (registered_vehicles_state != current_registered_vehicles_state || number_of_vehicles != registered_vehicles.Size()) {
+
       vehicle_id_list = registered_vehicles.GetIDList();
       number_of_vehicles = vehicle_id_list.size();
-      unsigned long new_frame_size = INITIAL_SIZE + GROWTH_STEP_SIZE * static_cast<uint64_t>( static_cast<float>(number_of_vehicles) * INV_GROWTH_STEP_SIZE);
-      if (new_frame_size != control_frame_ptr->size()) {
-        localization_frame_ptr = std::make_shared<LocalizationFrame>(new_frame_size);
-        collision_frame_ptr = std::make_shared<CollisionFrame>(new_frame_size);
-        tl_frame_ptr = std::make_shared<TLFrame>(new_frame_size);
-        control_frame_ptr = std::make_shared<ControlFrame>(new_frame_size);
+
+      // Reserve more space if needed.
+      uint64_t growth_factor = static_cast<uint64_t>(static_cast<float>(number_of_vehicles) * INV_GROWTH_STEP_SIZE);
+      uint64_t new_frame_capacity = INITIAL_SIZE + GROWTH_STEP_SIZE * growth_factor;
+      if (new_frame_capacity > current_reserved_capacity) {
+        localization_frame.reserve(new_frame_capacity);
+        collision_frame.reserve(new_frame_capacity);
+        tl_frame.reserve(new_frame_capacity);
+        control_frame.reserve(new_frame_capacity);
       }
+
       registered_vehicles_state = registered_vehicles.GetState();
     }
 
+    // Reset frames for current cycle.
+    localization_frame.clear();
+    localization_frame.resize(number_of_vehicles);
+    collision_frame.clear();
+    collision_frame.resize(number_of_vehicles);
+    tl_frame.clear();
+    tl_frame.resize(number_of_vehicles);
+    control_frame.clear();
+    control_frame.resize(number_of_vehicles);
+
+    // Run core operation stages.
     for (unsigned long index = 0u; index < vehicle_id_list.size(); ++index) {
       localization_stage.Update(index);
     }
@@ -167,7 +186,7 @@ void TrafficManagerLocal::Run() {
     // Building the command array for current cycle.
     std::vector<carla::rpc::Command> batch_command(number_of_vehicles);
     for (unsigned long i = 0u; i < number_of_vehicles; ++i) {
-      batch_command.at(i) = control_frame_ptr->at(i);
+      batch_command.at(i) = control_frame.at(i);
     }
 
     // Sending the current cycle's batch command to the simulator.
@@ -207,12 +226,19 @@ void TrafficManagerLocal::Stop() {
   registered_vehicles_state = -1;
   track_traffic.Clear();
   previous_update_instance = chr::system_clock::now();
+  current_reserved_capacity = 0u;
 
   simulation_state.Reset();
   localization_stage.Reset();
   collision_stage.Reset();
   traffic_light_stage.Reset();
   motion_plan_stage.Reset();
+
+  buffer_map.clear();
+  localization_frame.clear();
+  collision_frame.clear();
+  tl_frame.clear();
+  control_frame.clear();
 
   run_traffic_manger.store(true);
   step_begin.store(false);
@@ -223,12 +249,7 @@ void TrafficManagerLocal::Release() {
 
   Stop();
 
-  buffer_map.reset();
   local_map.reset();
-  localization_frame_ptr.reset();
-  collision_frame_ptr.reset();
-  tl_frame_ptr.reset();
-  control_frame_ptr.reset();
 }
 
 void TrafficManagerLocal::Reset() {

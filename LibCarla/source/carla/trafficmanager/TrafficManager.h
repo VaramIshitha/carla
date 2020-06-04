@@ -12,12 +12,11 @@
 
 #include "carla/client/Actor.h"
 #include "carla/trafficmanager/TrafficManagerBase.h"
-#include "carla/trafficmanager/Constants.h"
+
+#define TM_DEFAULT_PORT 8000
 
 namespace carla {
 namespace traffic_manager {
-
-using constants::Networking::TM_DEFAULT_PORT;
 
 using ActorPtr = carla::SharedPtr<carla::client::Actor>;
 

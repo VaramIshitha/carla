@@ -12,14 +12,11 @@
 #include "carla/Memory.h"
 #include "carla/rpc/TrafficLightState.h"
 
-#include "carla/trafficmanager/TrafficManager.h"
-
 namespace carla {
 
 using TM = traffic_manager::TrafficManager;
 
 namespace client {
-
 
   template <typename AttributesT>
   static bool GetControlIsSticky(const AttributesT &attributes) {

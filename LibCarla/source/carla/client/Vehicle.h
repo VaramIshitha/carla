@@ -12,7 +12,7 @@
 #include "carla/rpc/VehicleControl.h"
 #include "carla/rpc/VehiclePhysicsControl.h"
 
-#define TM_PORT 8000
+#include "carla/trafficmanager/TrafficManager.h"
 
 namespace carla {
 
@@ -37,7 +37,7 @@ namespace client {
     using ActorState::GetBoundingBox;
 
     /// Switch on/off this vehicle's autopilot.
-    void SetAutopilot(bool enabled = true, uint16_t tm_port = TM_PORT);
+    void SetAutopilot(bool enabled = true, uint16_t tm_port = TM_DEFAULT_PORT);
 
     /// Apply @a control to this vehicle.
     void ApplyControl(const Control &control);

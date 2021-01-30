@@ -54,19 +54,23 @@ namespace client {
       return _simulator->GetAvailableMaps();
     }
 
-    World ReloadWorld() const {
-      return World{_simulator->ReloadEpisode()};
+    World ReloadWorld(bool reset_settings = true) const {
+      return World{_simulator->ReloadEpisode(reset_settings)};
     }
 
-    World LoadWorld(std::string map_name) const {
-      return World{_simulator->LoadEpisode(std::move(map_name))};
+    World LoadWorld(
+        std::string map_name,
+        bool reset_settings = true,
+        rpc::MapLayer map_layers = rpc::MapLayer::All) const {
+      return World{_simulator->LoadEpisode(std::move(map_name), reset_settings, map_layers)};
     }
 
     World GenerateOpenDriveWorld(
         std::string opendrive,
-        const rpc::OpendriveGenerationParameters & params) const {
+        const rpc::OpendriveGenerationParameters & params,
+        bool reset_settings = true) const {
       return World{_simulator->LoadOpenDriveEpisode(
-          std::move(opendrive), params)};
+          std::move(opendrive), params, reset_settings)};
     }
 
     /// Return an instance of the world currently active in the simulator.
@@ -84,8 +88,8 @@ namespace client {
       return _simulator->GetCurrentEpisode();
     }
 
-    std::string StartRecorder(std::string name) {
-      return _simulator->StartRecorder(name);
+    std::string StartRecorder(std::string name, bool additional_data = false) {
+      return _simulator->StartRecorder(name, additional_data);
     }
 
     void StopRecorder(void) {
@@ -106,6 +110,10 @@ namespace client {
 
     std::string ReplayFile(std::string name, double start, double duration, uint32_t follow_id) {
       return _simulator->ReplayFile(name, start, duration, follow_id);
+    }
+
+    void StopReplayer(bool keep_actors) {
+      _simulator->StopReplayer(keep_actors);
     }
 
     void SetReplayerTimeFactor(double time_factor) {

@@ -9,6 +9,7 @@
 #include "Carla/Sensor/PixelReader.h"
 #include "Carla/Sensor/Sensor.h"
 
+#include "Runtime/RenderCore/Public/RenderCommandFence.h"
 #include "SceneCaptureSensor.generated.h"
 
 class UDrawFrustumComponent;
@@ -29,6 +30,7 @@ class CARLA_API ASceneCaptureSensor : public ASensor
 {
   GENERATED_BODY()
 
+  friend class ACarlaGameModeBase;
   friend class FPixelReader;
 
 public:
@@ -218,6 +220,18 @@ public:
   float GetMotionBlurMinObjectScreenSize() const;
 
   UFUNCTION(BlueprintCallable)
+  void SetLensFlareIntensity(float Intensity);
+
+  UFUNCTION(BlueprintCallable)
+  float GetLensFlareIntensity() const;
+
+  UFUNCTION(BlueprintCallable)
+  void SetBloomIntensity(float Intensity);
+
+  UFUNCTION(BlueprintCallable)
+  float GetBloomIntensity() const;
+
+  UFUNCTION(BlueprintCallable)
   void SetWhiteTemp(float Temp);
 
   UFUNCTION(BlueprintCallable)
@@ -236,7 +250,7 @@ public:
   float GetChromAberrIntensity() const;
 
   UFUNCTION(BlueprintCallable)
-  void SetChromAberrOffset(float Offset);
+  void SetChromAberrOffset(float ChromAberrOffset);
 
   UFUNCTION(BlueprintCallable)
   float GetChromAberrOffset() const;
@@ -257,17 +271,41 @@ public:
     FPixelReader::SavePixelsToDisk(*CaptureRenderTarget, FilePath);
   }
 
+  UFUNCTION(BlueprintCallable)
+  USceneCaptureComponent2D *GetCaptureComponent2D()
+  {
+    return CaptureComponent2D;
+  }
+
+  /// Immediate enqueues render commands of the scene at the current time.
+  void EnqueueRenderSceneImmediate();
+
+  /// Blocks until the render thread has finished all it's tasks.
+  void WaitForRenderThreadToFinsih() {
+    FlushRenderingCommands();
+  }
+
 protected:
 
   virtual void BeginPlay() override;
 
-  virtual void Tick(float DeltaTime) override;
+  virtual void PrePhysTick(float DeltaSeconds) override;
+  virtual void PostPhysTick(UWorld *World, ELevelTick TickType, float DeltaTime) override;
 
   virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
   virtual void SetUpSceneCaptureComponent(USceneCaptureComponent2D &SceneCapture) {}
 
-private:
+  /// Render target necessary for scene capture.
+  UPROPERTY(EditAnywhere)
+  UTextureRenderTarget2D *CaptureRenderTarget = nullptr;
+
+  /// Scene capture component.
+  UPROPERTY(EditAnywhere)
+  USceneCaptureComponent2D *CaptureComponent2D = nullptr;
+
+  UPROPERTY(EditAnywhere)
+  float TargetGamma = 2.2f;
 
   /// Image width in pixels.
   UPROPERTY(EditAnywhere)
@@ -281,14 +319,8 @@ private:
   UPROPERTY(EditAnywhere)
   bool bEnablePostProcessingEffects = true;
 
-  UPROPERTY(EditAnywhere)
-  float TargetGamma = 2.2f;
+  FRenderCommandFence RenderFence;
 
-  /// Render target necessary for scene capture.
-  UPROPERTY(EditAnywhere)
-  UTextureRenderTarget2D *CaptureRenderTarget = nullptr;
+  bool ReadyToCapture = false;
 
-  /// Scene capture component.
-  UPROPERTY(EditAnywhere)
-  USceneCaptureComponent2D *CaptureComponent2D = nullptr;
 };

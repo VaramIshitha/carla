@@ -24,9 +24,11 @@
 #include "carla/road/element/RoadInfoCrosswalk.h"
 #include "carla/road/InformationSet.h"
 #include "carla/road/Signal.h"
+#include "carla/road/SignalType.h"
 
 #include <iterator>
 #include <memory>
+#include <algorithm>
 
 using namespace carla::road::element;
 
@@ -36,6 +38,7 @@ namespace road {
   boost::optional<Map> MapBuilder::Build() {
 
     CreatePointersBetweenRoadSegments();
+    RemoveZeroLaneValiditySignalReferences();
 
     for (auto &&info : _temp_road_info_container) {
       DEBUG_ASSERT(info.first != nullptr);
@@ -191,10 +194,10 @@ namespace road {
       lc = RoadInfoMarkRecord::LaneChange::Increase;
     } else if (lane_change == "decrease") {
       lc = RoadInfoMarkRecord::LaneChange::Decrease;
-    } else if (lane_change == "both") {
-      lc = RoadInfoMarkRecord::LaneChange::Both;
-    } else {
+    } else if (lane_change == "none") {
       lc = RoadInfoMarkRecord::LaneChange::None;
+    } else {
+      lc = RoadInfoMarkRecord::LaneChange::Both;
     }
     _temp_lane_info_container[lane].emplace_back(std::make_unique<RoadInfoMarkRecord>(s, road_mark_id, type,
         weight, color,
@@ -747,7 +750,7 @@ namespace road {
   }
 
   geom::Transform MapBuilder::ComputeSignalTransform(std::unique_ptr<Signal> &signal, MapData &data) {
-    DirectedPoint point = data.GetRoad(signal->_road_id).GetDirectedPointIn(signal->_s);
+    DirectedPoint point = data.GetRoad(signal->_road_id).GetDirectedPointInNoLaneOffset(signal->_s);
     point.ApplyLateralOffset(static_cast<float>(-signal->_t));
     point.location.y *= -1; // Unreal Y axis hack
     point.location.z += static_cast<float>(signal->_zOffset);
@@ -764,9 +767,15 @@ namespace road {
           _temp_signal_container[signal_reference->_signal_id].get();
     }
 
-    for(auto& signal_pair : _temp_signal_container){
+    for(auto& signal_pair : _temp_signal_container) {
       auto& signal = signal_pair.second;
-      signal->_transform = ComputeSignalTransform(signal, _map_data);
+      auto transform = ComputeSignalTransform(signal, _map_data);
+      // Hack: compensate RoadRunner displacement (25cm) due to lightbox size
+      if (SignalType::IsTrafficLight(signal->GetType())) {
+        transform.location = transform.location +
+            geom::Location(transform.GetForwardVector()*0.25);
+      }
+      signal->_transform = transform;
     }
 
     _map_data._signals = std::move(_temp_signal_container);
@@ -958,12 +967,49 @@ void MapBuilder::CreateController(
     }
   }
 
+  void MapBuilder::RemoveZeroLaneValiditySignalReferences() {
+    std::vector<element::RoadInfoSignal*> elements_to_remove;
+    for (auto * signal_reference : _temp_signal_reference_container) {
+      bool should_remove = true;
+      for (auto & lane_validity : signal_reference->_validities) {
+        if ( (lane_validity._from_lane != 0) ||
+             (lane_validity._to_lane != 0)) {
+          should_remove = false;
+          break;
+        }
+      }
+      if (signal_reference->_validities.size() == 0) {
+        should_remove = false;
+      }
+      if (should_remove) {
+        elements_to_remove.push_back(signal_reference);
+      }
+    }
+    for (auto* element : elements_to_remove) {
+      auto road_id = element->GetRoadId();
+      auto& road_info = _temp_road_info_container[GetRoad(road_id)];
+      road_info.erase(std::remove_if(road_info.begin(), road_info.end(),
+          [=] (auto& info_ptr) {
+            return (info_ptr.get() == element);
+          }), road_info.end());
+      _temp_signal_reference_container.erase(std::remove(_temp_signal_reference_container.begin(),
+          _temp_signal_reference_container.end(), element),
+          _temp_signal_reference_container.end());
+    }
+  }
+
   void MapBuilder::CheckSignalsOnRoads(Map &map) {
     for (auto& signal_pair : map._data._signals) {
       auto& signal = signal_pair.second;
       auto signal_position = signal->GetTransform().location;
       auto closest_waypoint_to_signal =
           map.GetClosestWaypointOnRoad(signal_position);
+      // workarround to not move speed signals
+      if (signal->GetName().substr(0, 6) == "Speed_" ||
+          signal->GetName().substr(0, 6) == "speed_" ||
+          signal->GetName().find("Stencil_STOP") != std::string::npos) {
+        continue;
+      }
       if(closest_waypoint_to_signal) {
         auto distance_to_road =
             (map.ComputeTransform(closest_waypoint_to_signal.get()).location -

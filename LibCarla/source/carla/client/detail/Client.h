@@ -10,6 +10,7 @@
 #include "carla/NonCopyable.h"
 #include "carla/Time.h"
 #include "carla/geom/Transform.h"
+#include "carla/geom/Location.h"
 #include "carla/rpc/Actor.h"
 #include "carla/rpc/ActorDefinition.h"
 #include "carla/rpc/AttachmentType.h"
@@ -17,13 +18,17 @@
 #include "carla/rpc/CommandResponse.h"
 #include "carla/rpc/EpisodeInfo.h"
 #include "carla/rpc/EpisodeSettings.h"
+#include "carla/rpc/LabelledPoint.h"
 #include "carla/rpc/LightState.h"
 #include "carla/rpc/MapInfo.h"
+#include "carla/rpc/MapLayer.h"
+#include "carla/rpc/EnvironmentObject.h"
 #include "carla/rpc/TrafficLightState.h"
 #include "carla/rpc/VehiclePhysicsControl.h"
 #include "carla/rpc/VehicleLightState.h"
 #include "carla/rpc/WeatherParameters.h"
 #include "carla/rpc/OpendriveGenerationParameters.h"
+#include "carla/rpc/VehicleLightStateList.h"
 
 #include <functional>
 #include <memory>
@@ -86,9 +91,11 @@ namespace detail {
 
     std::string GetServerVersion();
 
-    void LoadEpisode(std::string map_name);
+    void LoadEpisode(std::string map_name, bool reset_settings = true, rpc::MapLayer map_layer = rpc::MapLayer::All);
 
-    bool CheckIntermediateEpisode();
+    void LoadLevelLayer(rpc::MapLayer map_layer) const;
+
+    void UnloadLevelLayer(rpc::MapLayer map_layer) const;
 
     void CopyOpenDriveToServer(
         std::string opendrive, const rpc::OpendriveGenerationParameters & params);
@@ -147,23 +154,52 @@ namespace detail {
         rpc::ActorId actor,
         const geom::Transform &transform);
 
-    void SetActorVelocity(
+    void SetActorTargetVelocity(
         rpc::ActorId actor,
         const geom::Vector3D &vector);
 
-    void SetActorAngularVelocity(
+    void SetActorTargetAngularVelocity(
         rpc::ActorId actor,
         const geom::Vector3D &vector);
+
+    void EnableActorConstantVelocity(
+        rpc::ActorId actor,
+        const geom::Vector3D &vector);
+
+    void DisableActorConstantVelocity(
+        rpc::ActorId actor);
 
     void AddActorImpulse(
         rpc::ActorId actor,
-        const geom::Vector3D &vector);
+        const geom::Vector3D &impulse);
+
+    void AddActorImpulse(
+        rpc::ActorId actor,
+        const geom::Vector3D &impulse,
+        const geom::Vector3D &location);
+
+    void AddActorForce(
+        rpc::ActorId actor,
+        const geom::Vector3D &force);
+
+    void AddActorForce(
+        rpc::ActorId actor,
+        const geom::Vector3D &force,
+        const geom::Vector3D &location);
 
     void AddActorAngularImpulse(
         rpc::ActorId actor,
         const geom::Vector3D &vector);
 
+    void AddActorTorque(
+        rpc::ActorId actor,
+        const geom::Vector3D &vector);
+
     void SetActorSimulatePhysics(
+        rpc::ActorId actor,
+        bool enabled);
+
+    void SetActorEnableGravity(
         rpc::ActorId actor,
         bool enabled);
 
@@ -174,6 +210,14 @@ namespace detail {
     void ApplyControlToVehicle(
         rpc::ActorId vehicle,
         const rpc::VehicleControl &control);
+
+    void EnableCarSim(
+        rpc::ActorId vehicle,
+        std::string simfile_path);
+
+    void UseCarSimRoad(
+        rpc::ActorId vehicle,
+        bool enabled);
 
     void ApplyControlToWalker(
         rpc::ActorId walker,
@@ -203,10 +247,21 @@ namespace detail {
         rpc::ActorId traffic_light,
         bool freeze);
 
+    void ResetTrafficLightGroup(
+        rpc::ActorId traffic_light);
+
+    void ResetAllTrafficLights();
+
+    void FreezeAllTrafficLights(bool frozen);
+
+    /// Returns a list of pairs where the firts element is the vehicle ID
+    /// and the second one is the light state
+    rpc::VehicleLightStateList GetVehiclesLightStates();
+
     std::vector<ActorId> GetGroupTrafficLights(
         rpc::ActorId traffic_light);
 
-    std::string StartRecorder(std::string name);
+    std::string StartRecorder(std::string name, bool additional_data);
 
     void StopRecorder();
 
@@ -221,6 +276,8 @@ namespace detail {
     void SetReplayerTimeFactor(double time_factor);
 
     void SetReplayerIgnoreHero(bool ignore_hero);
+
+    void StopReplayer(bool keep_actors);
 
     void SubscribeToStream(
         const streaming::Token &token,
@@ -245,6 +302,21 @@ namespace detail {
     void UpdateServerLightsState(
         std::vector<rpc::LightState>& lights,
         bool discard_client = false) const;
+
+    /// Returns all the BBs of all the elements of the level
+    std::vector<geom::BoundingBox> GetLevelBBs(uint8_t queried_tag) const;
+
+    std::vector<rpc::EnvironmentObject> GetEnvironmentObjects(uint8_t queried_tag) const;
+
+    void EnableEnvironmentObjects(
+      std::vector<uint64_t> env_objects_ids,
+      bool enable) const;
+
+    std::pair<bool,rpc::LabelledPoint> ProjectPoint(
+        geom::Location location, geom::Vector3D direction, float search_distance) const;
+
+    std::vector<rpc::LabelledPoint> CastRay(
+        geom::Location start_location, geom::Location end_location) const;
 
   private:
 

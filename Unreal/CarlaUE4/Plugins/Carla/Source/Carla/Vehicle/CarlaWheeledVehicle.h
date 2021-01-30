@@ -13,9 +13,16 @@
 #include "Vehicle/VehicleLightState.h"
 #include "Vehicle/VehicleInputPriority.h"
 #include "Vehicle/VehiclePhysicsControl.h"
+#include "VehicleVelocityControl.h"
 #include "WheeledVehicleMovementComponent4W.h"
 
 #include "CoreMinimal.h"
+
+//-----CARSIM--------------------------------
+#ifdef WITH_CARSIM
+#include "CarSimMovementComponent.h"
+#endif
+//-------------------------------------------
 
 #include "CarlaWheeledVehicle.generated.h"
 
@@ -110,14 +117,22 @@ public:
   }
 
   UFUNCTION(Category = "CARLA Wheeled Vehicle", BlueprintCallable)
-  FVehiclePhysicsControl GetVehiclePhysicsControl();
+  FVehiclePhysicsControl GetVehiclePhysicsControl() const;
 
   UFUNCTION(Category = "CARLA Wheeled Vehicle", BlueprintCallable)
-  FVehicleLightState GetVehicleLightState();
+  FVehicleLightState GetVehicleLightState() const;
 
   void ApplyVehiclePhysicsControl(const FVehiclePhysicsControl &PhysicsControl);
 
+  void SetWheelCollision(UWheeledVehicleMovementComponent4W *Vehicle4W, const FVehiclePhysicsControl &PhysicsControl);
+
   void SetVehicleLightState(const FVehicleLightState &LightState);
+
+  UFUNCTION(BlueprintNativeEvent)
+  bool IsTwoWheeledVehicle();
+  virtual bool IsTwoWheeledVehicle_Implementation() {
+    return false;
+  }
 
   /// @}
   // ===========================================================================
@@ -135,6 +150,12 @@ public:
       InputControl.Priority = Priority;
     }
   }
+
+  UFUNCTION(Category = "CARLA Wheeled Vehicle", BlueprintCallable)
+  void ActivateVelocityControl(const FVector &Velocity);
+
+  UFUNCTION(Category = "CARLA Wheeled Vehicle", BlueprintCallable)
+  void DeactivateVelocityControl();
 
   /// @todo This function should be private to AWheeledVehicleAIController.
   void FlushVehicleControl();
@@ -196,6 +217,9 @@ protected:
   UFUNCTION(BlueprintImplementableEvent)
   void RefreshLightState(const FVehicleLightState &VehicleLightState);
 
+  UFUNCTION(BlueprintCallable, CallInEditor)
+  void AdjustVehicleBounds();
+
 private:
 
   /// Current state of the vehicle controller (for debugging purposes).
@@ -204,6 +228,9 @@ private:
 
   UPROPERTY(Category = "CARLA Wheeled Vehicle", EditAnywhere)
   UBoxComponent *VehicleBounds;
+
+  UPROPERTY(Category = "CARLA Wheeled Vehicle", EditAnywhere)
+  UVehicleVelocityControl* VelocityControl;
 
   struct
   {
@@ -214,4 +241,68 @@ private:
   InputControl;
 
   FVehicleControl LastAppliedControl;
+
+
+//-----CARSIM--------------------------------
+public:
+
+  // Enables carsim once enabled it won't turn back to UE4 physics simulation
+  // (for some reason the UE4 physics get meesed up after enabling carsim)
+  UFUNCTION(Category="CARLA Wheeled Vehicle", BlueprintCallable)
+  void EnableCarSim(FString SimfilePath = "");
+
+  // Enables usage of carsim terrain
+  UFUNCTION(Category="CARLA Wheeled Vehicle", BlueprintCallable)
+  void UseCarSimRoad(bool bEnabled);
+
+  #ifdef WITH_CARSIM
+  virtual FVector GetVelocity() const override;
+  #endif
+
+  UFUNCTION(Category="CARLA Wheeled Vehicle", BlueprintPure)
+  bool IsCarSimEnabled() const;
+
+  virtual void EndPlay(const EEndPlayReason::Type EndPlayReason);
+
+private:
+
+  // On car mesh hit, only works when carsim is enabled
+  UFUNCTION()
+  void OnCarSimHit(AActor *Actor,
+      AActor *OtherActor,
+      FVector NormalImpulse,
+      const FHitResult &Hit);
+
+  // On car mesh overlap, only works when carsim is enabled
+  // (this event triggers when overlapping with static environment)
+  UFUNCTION()
+  void OnCarSimOverlap(UPrimitiveComponent* OverlappedComponent,
+      AActor* OtherActor,
+      UPrimitiveComponent* OtherComp,
+      int32 OtherBodyIndex,
+      bool bFromSweep,
+      const FHitResult & SweepResult);
+
+  UFUNCTION()
+  void SwitchToUE4Physics();
+
+  UFUNCTION()
+  void RevertToCarSimPhysics();
+
+  UPROPERTY(Category="CARLA Wheeled Vehicle", VisibleAnywhere)
+  bool bCarSimEnabled = false;
+
+  UPROPERTY(Category="CARLA Wheeled Vehicle", EditAnywhere)
+  float CarSimOriginOffset = 150.f;
+
+  // Small workarround to allow optional CarSim plugin usage
+  UPROPERTY(Category="CARLA Wheeled Vehicle", VisibleAnywhere, BlueprintReadOnly, meta = (AllowPrivateAccess = "true"))
+  UMovementComponent * ExternalMovementComponent;
+
+  #ifdef WITH_CARSIM
+  AActor* OffsetActor;
+  // Casted version of ExternalMovementComponent
+  UCarSimMovementComponent * CarSimMovementComponent;
+  #endif
+  //-------------------------------------------
 };

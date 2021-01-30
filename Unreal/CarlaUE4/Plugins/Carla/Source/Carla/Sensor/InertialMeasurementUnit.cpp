@@ -50,15 +50,21 @@ void AInertialMeasurementUnit::SetOwner(AActor *Owner)
   Super::SetOwner(Owner);
 }
 
-// Copy of FWorldObserver_GetAngularVelocity but using radiants
+// Returns the angular velocity of Actor, expressed in the frame of Actor
 static FVector FIMU_GetActorAngularVelocityInRadians(
     AActor &Actor)
 {
   const auto RootComponent = Cast<UPrimitiveComponent>(Actor.GetRootComponent());
-  const FVector AngularVelocity =
-      RootComponent != nullptr ?
-          RootComponent->GetPhysicsAngularVelocityInRadians() :
-          FVector::ZeroVector;
+
+  FVector AngularVelocity;
+
+  if (RootComponent != nullptr) {
+      const FQuat ActorGlobalRotation = RootComponent->GetComponentTransform().GetRotation();
+      const FVector GlobalAngularVelocity = RootComponent->GetPhysicsAngularVelocityInRadians();
+      AngularVelocity = ActorGlobalRotation.UnrotateVector(GlobalAngularVelocity);
+  } else {
+      AngularVelocity = FVector::ZeroVector;
+  }
 
   return AngularVelocity;
 }
@@ -139,6 +145,7 @@ carla::geom::Vector3D AInertialMeasurementUnit::ComputeAccelerometer(
 
 carla::geom::Vector3D AInertialMeasurementUnit::ComputeGyroscope()
 {
+  check(GetOwner() != nullptr);
   const FVector AngularVelocity =
       FIMU_GetActorAngularVelocityInRadians(*GetOwner());
 
@@ -171,10 +178,8 @@ float AInertialMeasurementUnit::ComputeCompass()
   return Compass;
 }
 
-void AInertialMeasurementUnit::Tick(float DeltaTime)
+void AInertialMeasurementUnit::PostPhysTick(UWorld *World, ELevelTick TickType, float DeltaTime)
 {
-  Super::Tick(DeltaTime);
-
   auto Stream = GetDataStream(*this);
   Stream.Send(
       *this,
@@ -216,6 +221,4 @@ const FVector &AInertialMeasurementUnit::GetGyroscopeBias() const
 void AInertialMeasurementUnit::BeginPlay()
 {
   Super::BeginPlay();
-
-  constexpr float TO_METERS = 1e-2;
 }

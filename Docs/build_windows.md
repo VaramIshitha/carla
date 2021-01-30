@@ -1,35 +1,33 @@
 # Windows build
 
-* [__Windows build command summary__](#windows-build-command-summary)  
-* [__Requirements__](#requirements)  
-	* System specifics
-* [__Necessary software__](#necessary-software)  
-	* Minor installations: CMake, git, make, Python3 x64  
-	* Visual Studio 2017
-	* Unreal Engine 4.24 
-* [__CARLA build__](#carla-build)  
-	* Clone repository  
-	* Get assets  
-	* Set the environment variable  
-	* make CARLA  
+*   [__Windows build command summary__](#windows-build-command-summary)  
+*   [__Requirements__](#requirements)  
+	*   [System specifics](#system-specifics)  
+*   [__Necessary software__](#necessary-software)  
+	*   [Minor installations (CMake, git, make, Python3 x64)](#minor-installations)  
+	*   [Visual Studio 2017](#visual-studio-2017)  
+	*   [Unreal Engine (4.24)](#unreal-engine)  
+*   [__CARLA build__](#carla-build)  
+	*   [Clone repository](#clone-repository)  
+	*   [Get assets](#get-assets)  
+	*   [Set the environment variable](#set-the-environment-variable)  
+	*   [make CARLA](#make-carla)  
 
-The build process can be quite long and tedious. The **[F.A.Q.](build_faq.md)** section contains the most common issues and solutions that appear during the installation. However, the CARLA forum is open for anybody to post unexpected issues, doubts or suggestions. There is a specific section for installation issues on Linux. Feel free to login and become part of the community. 
-
-<div class="build-buttons">
-<p>
-<a href="https://forum.carla.org/" target="_blank" class="btn btn-neutral" title="Go to the CARLA forum">
-CARLA forum</a>
-</p>
-</div>
+The build process can be quite long and tedious. The **[F.A.Q.](build_faq.md)** page offers solution for the most common complications. Alternatively, use the [CARLA forum](https://forum.carla.org/c/installation-issues/linux) to post any unexpected issues that may occur.  
 
 ---
 ## Windows build command summary 
 
 <details>
 <summary> Show command lines to build on Windows</summary>
+<br>
+To execute the <code>make</code> commands below, you <b>must</b> use the Visual Studio 2017 native console x64 <b>with</b> administrator rights, otherwise you may be getting permission errors.
 
+!!! Important
+    To execute the ```make``` commands below, you **must** use the Visual Studio 2017 native console x64 **with** administrator rights, otherwise you may be getting permission errors.
+	
 ```sh
-# Make sure to meet the minimum requirements.
+# Make sure to meet the minimum requirements
 
 # Necessary software: 
 #   CMake
@@ -37,19 +35,27 @@ CARLA forum</a>
 #   Make
 #   Python3 x64
 #   Unreal Engine 4.24
-#   Visual Studio 2017 with Windows 8.1 SDK and x64 Visual C++ Toolset.
+#   Visual Studio 2017 with Windows 8.1 SDK and x64 Visual C++ Toolset
 
 # Set environment variables for the software
 
 # Clone the CARLA repository
 git clone https://github.com/carla-simulator/carla
 
-# make the CARLA server and the CARLA client
-make launch
+# make the CARLA client and the CARLA server
 make PythonAPI
+make launch
 
-# Press play in the Editor to initialize the server, and run an example script to test CARLA. 
-cd PythonAPI/Examples && python3 spawn_npc.py
+# Press play in the Editor to initialize the server
+# Run example scripts to test CARLA
+# Terminal A 
+cd PythonAPI/examples
+python3 spawn_npc.py 
+# Terminal B
+cd PythonAPI/examples
+python3 dynamic_weather.py 
+# The PythonAPI will be built based on the installed Python version, but the docs will use Python3 by default.
+
 ```
 </details>
 
@@ -86,12 +92,38 @@ Get the 2017 version from [here](https://developerinsider.co/download-visual-stu
 !!! Important
     Other Visual Studio versions may cause conflict. Even if these have been uninstalled, some registers may persist. To completely clean Visual Studio from the computer, go to `Program Files (x86)\Microsoft Visual Studio\Installer\resources\app\layout` and run `.\InstallCleanup.exe -full`  
 
-### Unreal Engine 4.24
+### Unreal Engine
 
-Go to [Unreal Engine](https://www.unrealengine.com/download) and download the _Epic Games Launcher_. In `Engine versions/Library`, download __Unreal Engine 4.24.x__. Make sure to run it in order to check that everything was properly installed.  
+Since CARLA 0.9.11, we have included some fixes to the engine that requires to modify it so it is no longer possible to use the Unreal Engine version provided by Epic Games Launcher. To build this modified version, we need to download the engine's code from source and then apply some patches that we provide. Be aware that to download the Unreal Engine's source code, you need to have a Github account linked to the Unreal's account. If you do not have it, please follow [this guide](https://www.unrealengine.com/en-US/ue4-on-github) before going any further.
+
+* __1.__ Open a terminal, go to the folder in which you want to save Unreal Engine and, clone the 4.24 branch on your computer.
+```cmd
+git clone --depth=1 -b 4.24 https://github.com/EpicGames/UnrealEngine.git
+```
 
 !!! Note 
-    Having VS2017 and UE4.24 installed, a __Generate Visual Studio project files__ option should appear when doing right-click on __.uproject__ files. If this is not available, something went wrong whith the UE4.24 installation. Create a UE project to check it out and reinstall if necessary. 
+    Keep it as close as `C://` as you can because if the path exceeds certain longitude __Setup.bat__ will return errors in step __3__.
+
+* __2.__ Inside the engine's source folder, we need to download our patch and apply it.
+```cmd
+    cd UnrealEngine
+    powershell -Command "(New-Object System.Net.WebClient).DownloadFile('https://carla-releases.s3.eu-west-3.amazonaws.com/Backup/UE4_patch_wheels.patch', 'UE4_patch_wheels.patch')"
+    git apply UE4_patch_wheels.patch
+```
+
+* __3.__ Run the configuration scripts.
+```cmd
+    Setup.bat
+    GenerateProjectFiles.bat
+```
+
+* __4.__ Now, we need to compile the engine. Open the __UE4.sln__ file inside the source folder with Visual Studio (Epic recommends 2017 or 2019 versions). Make sure that in the build bar, it is selected the 'Development Editor', 'Win64' and, 'UnrealBuildTool' options. Check [this guide](https://docs.unrealengine.com/en-US/ProductionPipelines/DevelopmentSetup/BuildingUnrealEngine/index.html) if you need any help. Then, in the solution explorer, right-click in __UE4__ and select __Build__.
+
+* __5.__ Once the solution is compiled you can open the engine to check that everything was correct launching the executable `Engine\Binaries\Win64\UE4Editor.exe`.
+
+!!! Note
+    If the installation was successful, this should be recognised by the Unreal Engine's version 
+selector and when you use __Switch Unreal Engine version__ when right-clicking on __.uproject__ files, it should appear as __Source Build at PATH__ where PATH is the installation path that you have chosen. If you can not see this selector or the __Generate Visual Studio project files__ when you right-click on __.uproject__ files, something went wrong with the UE4 installation and probably you need to reinstall it correctly.
 
 ---
 ## CARLA build
@@ -134,77 +166,73 @@ __2.   On the `Advanced` panel__ open `Environment Variables...`.
 __3.   Click `New...`__ to create the variable.  
 __4.   Name the variable as `UE4_ROOT`__ and choose the path to the installation folder of the desire UE4 installation.  
 
+
 ### make CARLA
 
-The last step is to finally build CARLA. There are different `make` commands to build the different modules. All of them run in the root CARLA folder.  
+The last step is to finally build CARLA. There are different `make` commands to build the different modules. All of them run in the root CARLA folder.
 
 !!! Warning
-    Make sure to run `make launch` to prepare the server and `make PythonAPI` for the client.  
-    Alternatively `make LibCarla` will prepare the CARLA library to be imported anywhere. 
+    Make sure to run `make PythonAPI` to prepare the client and `make launch` for the server.
+    Alternatively `make LibCarla` will prepare the CARLA library to be imported anywhere.
+
+* __make PythonAPI__ compiles the API client, necessary to grant control over the simulation. It is only needed the first time. Remember to run it again when updating CARLA. Scripts will be able to run after this command is executed.  
+```sh
+make PythonAPI
+```
 
 * __make launch__ compiles the server simulator and launches Unreal Engine. Press **Play** to start the spectator view and close the editor window to exit. Camera can be moved with `WASD` keys and rotated by clicking the scene while moving the mouse around.  
 ```sh
 make launch
-```  
-The project may ask to build other instances such as `UE4Editor-Carla.dll` the first time. Agree in order to open the project. During the first launch, the editor may show warnings regarding shaders and mesh distance fields. These take some time to be loaded and the city will not show properly until then.  
+```
+The project may ask to build other instances such as `UE4Editor-Carla.dll` the first time. Agree in order to open the project. During the first launch, the editor may show warnings regarding shaders and mesh distance fields. These take some time to be loaded and the city will not show properly until then.
 
-* __make PythonAPI__ compiles the API client, necessary to grant control over the simulation. It is only needed the first time. Remember to run it again when updating CARLA. Scripts will be able to run after this command is executed. The following example will spawn some life into the town.  
+
+Finally, let's test the simulator. Inside `PythonAPI/examples` and `PythonAPI/util` there are some example scripts that may be especially useful for starters. The following commands will spawn some life into the town, and create a weather cycle. Each script should be run in one terminal 
 
 ```sh
-make PythonAPI && cd PythonAPI/examples && python3 spawn_npc.py
-``` 
+# Terminal A 
+cd PythonAPI/examples
+python3 spawn_npc.py  
+# Terminal B
+cd PythonAPI/examples
+python3 dynamic_weather.py 
+# The PythonAPI will be built based on the installed Python version, but the docs will use Python3 by default.
+```
+
 !!! Important
-    If the simulation is running at very low FPS rates, go to `Edit/Editor preferences/Performance` in the UE editor and disable __Use less CPU when in background__. 
+    If the simulation is running at very low FPS rates, go to `Edit/Editor preferences/Performance` in the UE editor and disable __Use less CPU when in background__.
 
 Now CARLA is ready to go. Here is a brief summary of the most useful `make` commands available.  
 
-<table class ="defTable">
-<thead>
-<th>Command</th>
-<th>Description</th>
-</thead>
-<tbody>
-<td>
-<code>make help</code> </td>
-<td>Prints all available commands.</td>
-</tr>
-<tr>
-<td><code>make launch</code></td>
-<td>Launches CARLA server in Editor window.</td>
-</tr>
-<tr>
-<td><code>make PythonAPI</code></td>
-<td>Builds the CARLA client.</td>
-</tr>
-<tr>
-<td><code>make package</code></td>
-<td>Builds CARLA and creates a packaged version for distribution.</td>
-</tr>
-<tr>
-<td><code>make clean</code></td>
-<td>Deletes all the binaries and temporals generated by the build system.</td>
-</tr>
-<tr>
-<td><code>make rebuild</code></td>
-<td>make clean and make launch both in one command.</td>
-</tbody>
-</table>
+| Command | Description |
+| ------- | ------- |
+| `make help`                                                           | Prints all available commands.                                        |
+| `make launch`                                                         | Launches CARLA server in Editor window.                               |
+| `make PythonAPI`                                                      | Builds the CARLA client.                                              |
+| `make package`                                                        | Builds CARLA and creates a packaged version for distribution.         |
+| `make clean`                                                          | Deletes all the binaries and temporals generated by the build system. |
+| `make rebuild`                                                        | `make clean` and `make launch` both in one command.                   |
+
+
 
 ---
-<br>
-Keep reading this section to learn how to update the build or take some first steps in CARLA. 
+
+Read the **[F.A.Q.](build_faq.md)** page or post in the [CARLA forum](https://forum.carla.org/c/installation-issues/linux) for any issues regarding this guide.  
+
+Some recommendations after finishing the build. Learn how to update the CARLA build or take your first steps in the simulation, and learn some core concepts.  
 <div class="build-buttons">
-<p>
-<a href="../core_concepts" target="_blank" class="btn btn-neutral" title="Learn about CARLA core concepts">
-Go to __First steps__</a>
-</p>
 
 <p>
 <a href="../build_update" target="_blank" class="btn btn-neutral" title="Learn how to update the build">
 Update CARLA</a>
 </p>
-</div>
 
+<p>
+<a href="../core_concepts" target="_blank" class="btn btn-neutral" title="Learn about CARLA core concepts">
+First steps</a>
+</p>
+
+</div>
 
 
 

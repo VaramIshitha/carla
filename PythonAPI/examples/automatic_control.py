@@ -640,7 +640,7 @@ class CameraManager(object):
             return
         if self.sensors[self.index][0].startswith('sensor.lidar'):
             points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
-            points = np.reshape(points, (int(points.shape[0] / 3), 3))
+            points = np.reshape(points, (int(points.shape[0] / 4), 4))
             lidar_data = np.array(points[:, :2])
             lidar_data *= min(self.hud.dim) / 100.0
             lidar_data += (0.5 * self.hud.dim[0], 0.5 * self.hud.dim[1])
@@ -733,7 +733,7 @@ def game_loop(args):
                 control.manual_gear_shift = False
                 world.player.apply_control(control)
             else:
-                agent.update_information(world)
+                agent.update_information()
 
                 world.tick(clock)
                 world.render(display)

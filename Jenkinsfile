@@ -20,7 +20,7 @@ pipeline
                 {
                     JOB_ID = "${env.BUILD_TAG}"
                     jenkinsLib = load("/home/jenkins/jenkins.groovy")
-                    
+
                     jenkinsLib.CreateUbuntuBuildNode(JOB_ID)
                     jenkinsLib.CreateWindowsBuildNode(JOB_ID)
                 }
@@ -43,7 +43,8 @@ pipeline
                         {
                             steps
                             {
-                                sh 'make setup'
+                                sh 'git update-index --skip-worktree Unreal/CarlaUE4/CarlaUE4.uproject'
+                                sh 'make setup ARGS="--python-version=3.7,2"'
                             }
                         }
                         stage('ubuntu build')
@@ -51,8 +52,9 @@ pipeline
                             steps
                             {
                                 sh 'make LibCarla'
-                                sh 'make PythonAPI'
-                                sh 'make CarlaUE4Editor'
+                                sh 'make PythonAPI ARGS="--python-version=3.7,2"'
+                                sh 'make CarlaUE4Editor ARGS="--carsim"'
+                                sh 'make plugins'
                                 sh 'make examples'
                             }
                             post
@@ -68,7 +70,7 @@ pipeline
                         {
                             steps
                             {
-                                sh 'make check ARGS="--all --xml"'
+                                sh 'make check ARGS="--all --xml --python-version=3.7,2"'
                             }
                             post
                             {
@@ -90,13 +92,13 @@ pipeline
                         {
                             steps
                             {
-                                sh 'make package'
-                                sh 'make package ARGS="--packages=AdditionalMaps --clean-intermediate"'
+                                sh 'make package ARGS="--python-version=3.7,2 --carsim"'
+                                sh 'make package ARGS="--packages=AdditionalMaps,Town06_Opt,Town07_Opt,Town10HD_Opt --target-archive=AdditionalMaps --clean-intermediate --python-version=3.7,2"'
                                 sh 'make examples ARGS="localhost 3654"'
                             }
-                            post 
+                            post
                             {
-                                always 
+                                always
                                 {
                                     archiveArtifacts 'Dist/*.tar.gz'
                                     stash includes: 'Dist/CARLA*.tar.gz', name: 'ubuntu_package'
@@ -110,7 +112,7 @@ pipeline
                                         {
                                             JOB_ID = "${env.BUILD_TAG}"
                                             jenkinsLib = load("/home/jenkins/jenkins.groovy")
-                                            
+
                                             jenkinsLib.CreateUbuntuTestNode(JOB_ID)
                                         }
                                     }
@@ -127,7 +129,7 @@ pipeline
                                 unstash name: 'ubuntu_examples'
                                 sh 'tar -xvzf Dist/CARLA*.tar.gz -C Dist/'
                                 sh 'DISPLAY= ./Dist/CarlaUE4.sh -opengl --carla-rpc-port=3654 --carla-streaming-port=0 -nosound > CarlaUE4.log &'
-                                sh 'make smoke_tests ARGS="--xml"'
+                                sh 'make smoke_tests ARGS="--xml --python-version=3.7,2"'
                                 sh 'make run-examples ARGS="localhost 3654"'
                             }
                             post
@@ -143,14 +145,23 @@ pipeline
                                         {
                                             JOB_ID = "${env.BUILD_TAG}"
                                             jenkinsLib = load("/home/jenkins/jenkins.groovy")
-                                            
+
                                             jenkinsLib.DeleteUbuntuTestNode(JOB_ID)
                                         }
                                     }
                                 }
                             }
                         }
-                        stage('ubuntu deploy')
+                        stage('ubuntu deploy dev')
+                        {
+                            when { branch "dev"; }
+                            steps
+                            {
+                                sh 'git checkout .'
+                                sh 'make deploy ARGS="--replace-latest"'
+                            }
+                        }
+                        stage('ubuntu deploy master')
                         {
                             when { anyOf { branch "master"; buildingTag() } }
                             steps
@@ -167,6 +178,7 @@ pipeline
                                 sh 'rm -rf ~/carla-simulator.github.io/Doxygen'
                                 sh '''
                                     cd ~/carla-simulator.github.io
+                                    git remote set-url origin git@github.com:carla-simulator/carla-simulator.github.io.git
                                     git fetch
                                     git checkout -B master origin/master
                                 '''
@@ -188,11 +200,11 @@ pipeline
                             }
                         }
                     }
-                    post 
+                    post
                     {
-                        always 
-                        { 
-                            deleteDir() 
+                        always
+                        {
+                            deleteDir()
 
                             node('master')
                             {
@@ -200,7 +212,7 @@ pipeline
                                 {
                                     JOB_ID = "${env.BUILD_TAG}"
                                     jenkinsLib = load("/home/jenkins/jenkins.groovy")
-                                    
+
                                     jenkinsLib.DeleteUbuntuBuildNode(JOB_ID)
                                 }
                             }
@@ -222,6 +234,10 @@ pipeline
                             {
                                 bat """
                                     call ../setEnv64.bat
+                                    git update-index --skip-worktree Unreal/CarlaUE4/CarlaUE4.uproject
+                                """
+                                bat """
+                                    call ../setEnv64.bat
                                     make setup
                                 """
                             }
@@ -240,7 +256,11 @@ pipeline
                                 """
                                 bat """
                                     call ../setEnv64.bat
-                                    make CarlaUE4Editor
+                                    make CarlaUE4Editor ARGS="--carsim"
+                                """
+                                bat """
+                                    call ../setEnv64.bat
+                                    make plugins
                                 """
                             }
                             post
@@ -268,11 +288,11 @@ pipeline
                             {
                                 bat """
                                     call ../setEnv64.bat
-                                    make package
+                                    make package ARGS="--carsim"
                                 """
                                 bat """
                                     call ../setEnv64.bat
-                                    make package ARGS="--packages=AdditionalMaps --clean-intermediate"
+                                    make package ARGS="--packages=AdditionalMaps,Town06_Opt,Town07_Opt,Town10HD_Opt --target-archive=AdditionalMaps --clean-intermediate"
                                 """
                             }
                             post {
@@ -283,7 +303,7 @@ pipeline
                         }
                         stage('windows deploy')
                         {
-                            when { anyOf { branch "master"; buildingTag() } }
+                            when { anyOf { branch "master"; branch "dev"; buildingTag() } }
                             steps {
                                 bat """
                                     call ../setEnv64.bat
@@ -293,11 +313,11 @@ pipeline
                             }
                         }
                     }
-                    post 
+                    post
                     {
-                        always 
-                        { 
-                            deleteDir() 
+                        always
+                        {
+                            deleteDir()
 
                             node('master')
                             {
@@ -305,7 +325,7 @@ pipeline
                                 {
                                     JOB_ID = "${env.BUILD_TAG}"
                                     jenkinsLib = load("/home/jenkins/jenkins.groovy")
-                                    
+
                                     jenkinsLib.DeleteWindowsBuildNode(JOB_ID)
                                 }
                             }

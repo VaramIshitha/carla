@@ -7,17 +7,26 @@
 #include "Carla.h"
 #include "Carla/Game/CarlaGameModeBase.h"
 #include "Carla/Game/CarlaHUD.h"
+#include "Engine/DecalActor.h"
+#include "Engine/LevelStreaming.h"
 
 #include <compiler/disable-ue4-macros.h>
-#include <carla/rpc/WeatherParameters.h>
 #include "carla/opendrive/OpenDriveParser.h"
 #include "carla/road/element/RoadInfoSignal.h"
+#include <carla/rpc/EnvironmentObject.h>
+#include <carla/rpc/WeatherParameters.h>
+#include <carla/rpc/MapLayer.h>
 #include <compiler/enable-ue4-macros.h>
+
+#include "Async/ParallelFor.h"
+#include "DynamicRHI.h"
 
 #include "DrawDebugHelpers.h"
 #include "Kismet/KismetSystemLibrary.h"
 
-#include "Carla/Traffic/TrafficLightManager.h"
+namespace cr = carla::road;
+namespace crp = carla::rpc;
+namespace cre = carla::road::element;
 
 ACarlaGameModeBase::ACarlaGameModeBase(const FObjectInitializer& ObjectInitializer)
   : Super(ObjectInitializer)
@@ -29,6 +38,8 @@ ACarlaGameModeBase::ACarlaGameModeBase(const FObjectInitializer& ObjectInitializ
   Episode = CreateDefaultSubobject<UCarlaEpisode>(TEXT("Episode"));
 
   Recorder = CreateDefaultSubobject<ACarlaRecorder>(TEXT("Recorder"));
+
+  ObjectRegister = CreateDefaultSubobject<UObjectRegister>(TEXT("ObjectRegister"));
 
   // HUD
   HUDClass = ACarlaHUD::StaticClass();
@@ -65,12 +76,6 @@ void ACarlaGameModeBase::InitGame(
   auto World = GetWorld();
   check(World != nullptr);
 
-  AActor* TrafficLightManagerActor =  UGameplayStatics::GetActorOfClass(World, ATrafficLightManager::StaticClass());
-  if(TrafficLightManagerActor == nullptr) {
-    World->SpawnActor<ATrafficLightManager>();
-  }
-
-
   GameInstance = Cast<UCarlaGameInstance>(GetGameInstance());
   checkf(
       GameInstance != nullptr,
@@ -98,6 +103,10 @@ void ACarlaGameModeBase::InitGame(
 
   GameInstance->NotifyInitGame();
 
+  OnEpisodeSettingsChangeHandle = FCarlaStaticDelegates::OnEpisodeSettingsChange.AddUObject(
+        this,
+        &ACarlaGameModeBase::OnEpisodeSettingsChanged);
+
   SpawnActorFactories();
 
   // make connection between Episode and Recorder
@@ -121,11 +130,27 @@ void ACarlaGameModeBase::BeginPlay()
 {
   Super::BeginPlay();
 
+  LoadMapLayer(GameInstance->GetCurrentMapLayer());
+  ReadyToRegisterObjects = true;
+
   if (true) { /// @todo If semantic segmentation enabled.
     check(GetWorld() != nullptr);
     ATagger::TagActorsInLevel(*GetWorld(), true);
     TaggerDelegate->SetSemanticSegmentationEnabled();
   }
+
+  // HACK: fix transparency see-through issues
+  // The problem: transparent objects are visible through walls.
+  // This is due to a weird interaction between the SkyAtmosphere component,
+  // the shadows of a directional light (the sun)
+  // and the custom depth set to 3 used for semantic segmentation
+  // The solution: Spawn a Decal.
+  // It just works!
+  GetWorld()->SpawnActor<ADecalActor>(
+      FVector(0,0,-1000000), FRotator(0,0,0), FActorSpawnParameters());
+
+  ATrafficLightManager* Manager = GetTrafficLightManager();
+  Manager->InitializeTrafficLights();
 
   Episode->InitializeAtBeginPlay();
   GameInstance->NotifyBeginEpisode(*Episode);
@@ -142,7 +167,10 @@ void ACarlaGameModeBase::BeginPlay()
     Recorder->GetReplayer()->CheckPlayAfterMapLoaded();
   }
 
-  UCarlaStatics::GetGameInstance(GetWorld())->CheckAndLoadMap(GetWorld(), *Episode);
+  if(ReadyToRegisterObjects && PendingLevelsToLoad == 0)
+  {
+    RegisterEnvironmentObjects();
+  }
 }
 
 void ACarlaGameModeBase::Tick(float DeltaSeconds)
@@ -158,6 +186,8 @@ void ACarlaGameModeBase::Tick(float DeltaSeconds)
 
 void ACarlaGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+  FCarlaStaticDelegates::OnEpisodeSettingsChange.Remove(OnEpisodeSettingsChangeHandle);
+
   Episode->EndPlay();
   GameInstance->NotifyEndEpisode();
 
@@ -194,20 +224,40 @@ void ACarlaGameModeBase::SpawnActorFactories()
 
 void ACarlaGameModeBase::ParseOpenDrive(const FString &MapName)
 {
-  if(!UCarlaStatics::GetGameInstance(Episode->GetWorld())->IsLevelPendingLoad())
+  std::string opendrive_xml = carla::rpc::FromLongFString(UOpenDrive::LoadXODR(MapName));
+  Map = carla::opendrive::OpenDriveParser::Load(opendrive_xml);
+  if (!Map.has_value()) {
+    UE_LOG(LogCarla, Error, TEXT("Invalid Map"));
+  }
+  else
   {
-    std::string opendrive_xml = carla::rpc::FromLongFString(UOpenDrive::LoadXODR(MapName));
-    Map = carla::opendrive::OpenDriveParser::Load(opendrive_xml);
-    if (!Map.has_value()) {
-      UE_LOG(LogCarla, Error, TEXT("Invalid Map"));
-    } else {
-      Episode->MapGeoReference = Map->GetGeoReference();
+    Episode->MapGeoReference = Map->GetGeoReference();
+  }
+}
+
+ATrafficLightManager* ACarlaGameModeBase::GetTrafficLightManager()
+{
+  if (!TrafficLightManager)
+  {
+    UWorld* World = GetWorld();
+    AActor* TrafficLightManagerActor = UGameplayStatics::GetActorOfClass(World, ATrafficLightManager::StaticClass());
+    if(TrafficLightManagerActor == nullptr)
+    {
+      FActorSpawnParameters SpawnParams;
+      SpawnParams.OverrideLevel = GetULevelFromName("TrafficLights");
+      TrafficLightManager = World->SpawnActor<ATrafficLightManager>(SpawnParams);
+    }
+    else
+    {
+      TrafficLightManager = Cast<ATrafficLightManager>(TrafficLightManagerActor);
     }
   }
+  return TrafficLightManager;
 }
 
 void ACarlaGameModeBase::DebugShowSignals(bool enable)
 {
+
   auto World = GetWorld();
   check(World != nullptr);
 
@@ -241,79 +291,233 @@ void ACarlaGameModeBase::DebugShowSignals(bool enable)
       FColor(0, 255, 0),
       true
     );
-
-    FString Text = FString(ODSignal->GetSignalId().c_str());
-    Text += FString(" - ");
-    Text += FString(ODSignal->GetName().c_str());
-
-    UKismetSystemLibrary::DrawDebugString (
-      World,
-      Location + Up * 250.0f,
-      Text,
-      nullptr,
-      FLinearColor(0, 255, 0, 255)
-    );
-
-    FString Text2 = FString(ODSignal->GetType().c_str());
-    Text2 += FString(" - ");
-    Text2 += FString(ODSignal->GetSubtype().c_str());
-
-    UKismetSystemLibrary::DrawDebugString (
-      World,
-      Location + Up * 175.0f,
-      Text,
-      nullptr,
-      FLinearColor(0, 255, 0, 255),
-      10000.0f
-    );
   }
 
+  TArray<const cre::RoadInfoSignal*> References;
   auto waypoints = Map->GenerateWaypointsOnRoadEntries();
+  std::unordered_set<cr::RoadId> ExploredRoads;
   for (auto & waypoint : waypoints)
   {
-    auto SignalReferences = Map->GetLane(waypoint).GetRoad()->GetInfos<carla::road::element::RoadInfoSignal>();
+    // Check if we already explored this road
+    if (ExploredRoads.count(waypoint.road_id) > 0)
+    {
+      continue;
+    }
+    ExploredRoads.insert(waypoint.road_id);
+
+    // Multiple times for same road (performance impact, not in behavior)
+    auto SignalReferences = Map->GetLane(waypoint).
+        GetRoad()->GetInfos<cre::RoadInfoSignal>();
     for (auto *SignalReference : SignalReferences)
     {
-      double current_s = waypoint.s;
-      double signal_s = SignalReference->GetS();
+      References.Add(SignalReference);
+    }
+  }
+  for (auto& Reference : References)
+  {
+    auto RoadId = Reference->GetRoadId();
+    const auto* SignalReference = Reference;
+    const FTransform SignalTransform = SignalReference->GetSignal()->GetTransform();
+    for(auto &validity : SignalReference->GetValidities())
+    {
+      for(auto lane : carla::geom::Math::GenerateRange(validity._from_lane, validity._to_lane))
+      {
+        if(lane == 0)
+          continue;
 
-      double delta_s = signal_s - current_s;
-      FTransform ReferenceTransform;
-      if (delta_s == 0)
-      {
-        ReferenceTransform = Map->ComputeTransform(waypoint);
-      }
-      else if (waypoint.lane_id < 0)
-      {
-        auto signal_waypoint = Map->GetNext(waypoint, FMath::Abs(delta_s)).front();
-        ReferenceTransform = Map->ComputeTransform(signal_waypoint);
-      }
-      else if(waypoint.lane_id > 0)
-      {
-        auto signal_waypoint = Map->GetNext(waypoint, FMath::Abs(delta_s)).front();
-        ReferenceTransform = Map->ComputeTransform(signal_waypoint);
-      }
-      else
-      {
-        continue;
-      }
-      DrawDebugSphere(
-          World,
-          ReferenceTransform.GetLocation(),
-          50.0f,
-          10,
-          FColor(0, 255, 0),
-          true
-      );
+        auto signal_waypoint = Map->GetWaypoint(
+            RoadId, lane, SignalReference->GetS()).get();
 
-      DrawDebugLine(
-          World,
-          ReferenceTransform.GetLocation(),
-          FTransform(SignalReference->GetSignal()->GetTransform()).GetLocation(),
-          FColor(0, 255, 0),
-          true
-      );
+        if(Map->GetLane(signal_waypoint).GetType() != cr::Lane::LaneType::Driving)
+          continue;
+
+        FTransform ReferenceTransform = Map->ComputeTransform(signal_waypoint);
+
+        DrawDebugSphere(
+            World,
+            ReferenceTransform.GetLocation(),
+            50.0f,
+            10,
+            FColor(0, 0, 255),
+            true
+        );
+
+        DrawDebugLine(
+            World,
+            ReferenceTransform.GetLocation(),
+            SignalTransform.GetLocation(),
+            FColor(0, 0, 255),
+            true
+        );
+      }
     }
   }
 
+}
+
+TArray<FBoundingBox> ACarlaGameModeBase::GetAllBBsOfLevel(uint8 TagQueried) const
+{
+  UWorld* World = GetWorld();
+
+  // Get all actors of the level
+  TArray<AActor*> FoundActors;
+  UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), FoundActors);
+
+  TArray<FBoundingBox> BoundingBoxes;
+  BoundingBoxes = UBoundingBoxCalculator::GetBoundingBoxOfActors(FoundActors, TagQueried);
+
+  return BoundingBoxes;
+}
+
+void ACarlaGameModeBase::RegisterEnvironmentObjects()
+{
+  // Get all actors of the level
+  TArray<AActor*> FoundActors;
+  UGameplayStatics::GetAllActorsOfClass(GetWorld(), AActor::StaticClass(), FoundActors);
+  ObjectRegister->RegisterObjects(FoundActors);
+}
+
+void ACarlaGameModeBase::EnableEnvironmentObjects(
+  const TSet<uint64>& EnvObjectIds,
+  bool Enable)
+{
+  ObjectRegister->EnableEnvironmentObjects(EnvObjectIds, Enable);
+}
+
+void ACarlaGameModeBase::LoadMapLayer(int32 MapLayers)
+{
+  const UWorld* World = GetWorld();
+
+  TArray<FName> LevelsToLoad;
+  ConvertMapLayerMaskToMapNames(MapLayers, LevelsToLoad);
+
+  FLatentActionInfo LatentInfo;
+  LatentInfo.CallbackTarget = this;
+  LatentInfo.ExecutionFunction = "OnLoadStreamLevel";
+  LatentInfo.Linkage = 0;
+  LatentInfo.UUID = 1;
+
+  PendingLevelsToLoad = LevelsToLoad.Num();
+
+  for(FName& LevelName : LevelsToLoad)
+  {
+    UGameplayStatics::LoadStreamLevel(World, LevelName, true, true, LatentInfo);
+    LatentInfo.UUID++;
+  }
+
+}
+
+void ACarlaGameModeBase::UnLoadMapLayer(int32 MapLayers)
+{
+  const UWorld* World = GetWorld();
+
+  TArray<FName> LevelsToUnLoad;
+  ConvertMapLayerMaskToMapNames(MapLayers, LevelsToUnLoad);
+
+  FLatentActionInfo LatentInfo;
+  LatentInfo.CallbackTarget = this;
+  LatentInfo.ExecutionFunction = "OnUnloadStreamLevel";
+  LatentInfo.UUID = 1;
+  LatentInfo.Linkage = 0;
+
+  PendingLevelsToUnLoad = LevelsToUnLoad.Num();
+
+  for(FName& LevelName : LevelsToUnLoad)
+  {
+    UGameplayStatics::UnloadStreamLevel(World, LevelName, LatentInfo, false);
+    LatentInfo.UUID++;
+  }
+
+}
+
+void ACarlaGameModeBase::ConvertMapLayerMaskToMapNames(int32 MapLayer, TArray<FName>& OutLevelNames)
+{
+  UWorld* World = GetWorld();
+  const TArray <ULevelStreaming*> Levels = World->GetStreamingLevels();
+  TArray<FString> LayersToLoad;
+
+  // Get all the requested layers
+  int32 LayerMask = 1;
+  int32 AllLayersMask = static_cast<crp::MapLayerType>(crp::MapLayer::All);
+
+  while(LayerMask > 0)
+  {
+    // Convert enum to FString
+    FString LayerName = UTF8_TO_TCHAR(MapLayerToString(static_cast<crp::MapLayer>(LayerMask)).c_str());
+    bool included = static_cast<crp::MapLayerType>(MapLayer) & LayerMask;
+    if(included)
+    {
+      LayersToLoad.Emplace(LayerName);
+    }
+    LayerMask = (LayerMask << 1) & AllLayersMask;
+  }
+
+  // Get all the requested level maps
+  for(ULevelStreaming* Level : Levels)
+  {
+    TArray<FString> StringArray;
+    FString FullSubMapName = Level->GetWorldAssetPackageFName().ToString();
+    // Discard full path, we just need the umap name
+    FullSubMapName.ParseIntoArray(StringArray, TEXT("/"), false);
+    FString SubMapName = StringArray[StringArray.Num() - 1];
+    for(FString LayerName : LayersToLoad)
+    {
+      if(SubMapName.Contains(LayerName))
+      {
+        OutLevelNames.Emplace(FName(*SubMapName));
+        break;
+      }
+    }
+  }
+
+}
+
+ULevel* ACarlaGameModeBase::GetULevelFromName(FString LevelName)
+{
+  ULevel* OutLevel = nullptr;
+  UWorld* World = GetWorld();
+  const TArray <ULevelStreaming*> Levels = World->GetStreamingLevels();
+
+  for(ULevelStreaming* Level : Levels)
+  {
+    FString FullSubMapName = Level->GetWorldAssetPackageFName().ToString();
+    if(FullSubMapName.Contains(LevelName))
+    {
+      OutLevel = Level->GetLoadedLevel();
+      if(!OutLevel)
+      {
+        UE_LOG(LogCarla, Warning, TEXT("%s has not been loaded"), *LevelName);
+      }
+      break;
+    }
+  }
+
+  return OutLevel;
+}
+
+void ACarlaGameModeBase::OnLoadStreamLevel()
+{
+  PendingLevelsToLoad--;
+
+  // Register new actors and tag them
+  if(ReadyToRegisterObjects && PendingLevelsToLoad == 0)
+  {
+    RegisterEnvironmentObjects();
+    ATagger::TagActorsInLevel(*GetWorld(), true);
+  }
+}
+
+void ACarlaGameModeBase::OnUnloadStreamLevel()
+{
+  PendingLevelsToUnLoad--;
+  // Update stored registered objects (discarding the deleted objects)
+  if(ReadyToRegisterObjects && PendingLevelsToUnLoad == 0)
+  {
+    RegisterEnvironmentObjects();
+  }
+}
+
+void ACarlaGameModeBase::OnEpisodeSettingsChanged(const FEpisodeSettings &Settings)
+{
+  CarlaSettingsDelegate->SetAllActorsDrawDistance(GetWorld(), Settings.MaxCullingDistance);
 }
